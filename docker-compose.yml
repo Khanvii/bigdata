@@ -1,0 +1,243 @@
+services:
+  cockroach1:
+      image: cockroachdb/cockroach:latest
+      container_name: cockroach1
+      hostname: cockroach1
+      volumes:
+        - '$COCKROACH1_DATA_DIR:/cockroach/cockroach-data'
+        - '$COCKROACH1_CERTS_DIR:/certs'
+      ports:
+        - "26257:26257"
+        - "8880:8080"
+      # command: "start --certs-dir=/certs --store=cockroach1 --advertise-addr=${COCKROACH1_HOST}:26257 --join=${COCKROACH1_HOST}:26257"
+      command: "start --certs-dir=/certs --store=cockroach1 --advertise-addr=${COCKROACH1_HOST}:26257 --join=${COCKROACH1_HOST}:26257"
+  cockroach2:
+      image: cockroachdb/cockroach:latest
+      container_name: cockroach2
+      hostname: cockroach2
+      volumes:
+        - '$COCKROACH2_DATA_DIR:/cockroach/cockroach-data'
+        - '$COCKROACH2_CERTS_DIR:/certs'
+      ports:
+        - "26258:26257"
+        - "8881:8080"
+      # command: "start --certs-dir=/certs --store=cockroach2 --advertise-addr=${COCKROACH2_HOST}:26258 --join=${COCKROACH1_HOST}:26257"
+      command: "start --certs-dir=/certs --store=cockroach2 --advertise-addr=${COCKROACH2_HOST}:26258 --join=${COCKROACH1_HOST}:26257"
+  cockroach3:
+      image: cockroachdb/cockroach:latest
+      container_name: cockroach3
+      hostname: cockroach3
+      volumes:
+        - '$COCKROACH3_DATA_DIR:/cockroach/cockroach-data'
+        - '$COCKROACH3_CERTS_DIR:/certs'
+      ports:
+        - "26259:26257"
+        - "8882:8080"
+      # command: "start --certs-dir=/certs --store=cockroach3 --advertise-addr=${COCKROACH3_HOST}:26259 --join=${COCKROACH1_HOST}:26257"
+      command: "start --certs-dir=/certs --store=cockroach3 --advertise-addr=${COCKROACH3_HOST}:26259 --join=${COCKROACH1_HOST}:26257"
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    hostname: schema-registry
+    container_name: schema-registry
+    ports:
+      - 8081:8081
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'broker:29092,broker:39092,broker:49092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    volumes:
+      - ./data:/tmp/data
+  kafka-connect-replaced:
+    image: confluentinc/cp-kafka-connect-base:latest
+    container_name: kafka-connect
+    ports:
+      - 8083:8083
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "broker:29092,broker:39092,broker:49092"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "kafka-connect"
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: kafka-connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _kafka-connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _kafka-connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _kafka-connect-status
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schema-registry:8081'
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+      CONNECT_LOG4J_LOGGERS: "org.apache.kafka.connect.runtime.rest=WARN,org.reflections=ERROR"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_PLUGIN_PATH: '/usr/share/java,/usr/share/confluent-hub-components/,/connectors/'
+    volumes:
+      - ./kafka/connectors:/connectors
+      - ./kafka/certs:/certs
+    command: 
+      - bash
+      - -c
+      - |
+        echo "Launching Kafka Connect worker"
+        /etc/confluent/docker/run &
+        #
+        sleep infinity
+  # Below is adapted from https://github.com/streamthoughts/kafka-connect-file-pulse/blob/master/docker-compose.yml to include file pulse in connect by default
+  kafka-connect:
+    image: streamthoughts/kafka-connect-file-pulse:latest
+    container_name: kafka-connect
+    depends_on:
+      - schema-registry
+    ports:
+      - "8083:8083"
+      - "8000:8000"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: 'broker:29092,broker:39092,broker:49092'
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: compose-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: docker-connect-configs
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 10000
+      CONNECT_OFFSET_STORAGE_TOPIC: docker-connect-offsets
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: docker-connect-status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      # kafka-connect-file-pulse is installed as a confluent-hub component
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/usr/share/confluent-hub-components/,/connectors"
+      CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+      # CONNECT_LOG4J_LOGGERS: io.streamthoughts=DEBUG,org.apache.zookeeper=ERROR,org.I0Itec.zkclient=ERROR,org.reflections=ERROR
+      # Uncomment for debugging the connector during development cycle
+      # KAFKA_OPTS: "-agentlib:jdwp=transport=dt_socket,server=y,address=8000,suspend=n"
+    volumes:
+      - ./tmp/connect:/tmp/kafka-connect
+      - ./kafka/connectors:/connectors
+      - ./kafka/certs:/certs
+      - ./kafka/logs:/logs-to-analyze
+      #- ./kafka/test-logs:/logs-to-analyze
+  ksqldb-server:
+    image: confluentinc/ksqldb-server:latest
+    hostname: ksqldb-server
+    container_name: ksqldb-server
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_BOOTSTRAP_SERVERS: 'broker:29092,broker:39092,broker:49092'
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: "true"
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: "true"
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KSQL_KSQL_CONNECT_URL: http://connect:8083
+      #KSQL_OPTS: "-Dksql.queries.file=/opt/app/src/queries.sql"
+    volumes:
+      - ./kafka/certs:/certs
+      # Below is for sql statements known to work which can be dropped here in a file. 
+      # Add --queries-file /opt/app/src to startup command, for headless mode. 
+      # See https://docs.ksqldb.io/en/latest/operate-and-deploy/installation/server-config/#non-interactive-headless-ksqldb-usage
+      - ./kafka/ksqldb-server/src:/opt/app/src 
+  ksqldb-cli:
+    image: confluentinc/ksqldb-cli:latest
+    container_name: ksqldb-cli
+    entrypoint: /bin/sh
+    tty: true
+  controller-1:
+    image: confluentinc/cp-server:latest
+    hostname: controller-1
+    container_name: controller-1
+    ports:
+     - 19092:9092
+     - 19093:9093
+     - 9012:9012
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller-1:9093'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENERS: 'CONTROLLER://controller-1:9093'
+      CLUSTER_ID: '4L6g3nShT-eMCtK--X86sw'
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: localhost:19092
+    volumes:
+      - ./kafka/data/controller-1:/var/lib/kafka/data
+  kafka-1:
+    image: confluentinc/cp-server:latest
+    hostname: kafka-1
+    container_name: kafka-1
+    ports:
+      - 29092:9092
+      - 29093:9093
+      - 9013:9013
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: 'broker'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller-1:9093'
+      KAFKA_LISTENERS: 'PLAINTEXT://kafka-1:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      CLUSTER_ID: '4L6g3nShT-eMCtK--X86sw'
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:29092
+    volumes:
+      - ./kafka/data/kafka-1:/var/lib/kafka/data
+    depends_on:
+      - controller-1
+  kafka-2:
+    image: confluentinc/cp-server:latest
+    hostname: kafka-2
+    container_name: kafka-2
+    ports:
+      - 39092:9092
+      - 39093:9093
+      - 9014:9014
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: 'broker'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller-1:9093'
+      KAFKA_LISTENERS: 'PLAINTEXT://kafka-2:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:39092
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      CLUSTER_ID: '4L6g3nShT-eMCtK--X86sw'
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:39092
+    volumes:
+      - ./kafka/data/kafka-2:/var/lib/kafka/data
+    depends_on:
+      - controller-1
+  kafka-3:
+    image: confluentinc/cp-server:latest
+    hostname: kafka-3
+    container_name: kafka-3
+    ports:
+      - 49092:9092
+      - 59093:9093
+      - 9015:9015
+    environment:
+      KAFKA_NODE_ID: 4
+      KAFKA_PROCESS_ROLES: 'broker'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller-1:9093'
+      KAFKA_LISTENERS: 'PLAINTEXT://kafka-3:9092'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:49092
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      CLUSTER_ID: '4L6g3nShT-eMCtK--X86sw'
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker:49092
+    volumes:
+      - ./kafka/data/kafka-3:/var/lib/kafka/data
+    depends_on:
+      - controller-1
+ 
+ 
+ 
+ 
+ 
+ 
+
+  
