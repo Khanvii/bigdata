@@ -1,5 +1,6 @@
 import logging
-import psycopg
+import psycopg2
+from psycopg2 import sql
 import json
 from kafka import KafkaConsumer
 import re
@@ -28,25 +29,20 @@ def setup_database():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS soccer_events (
-                                                    id SERIAL PRIMARY KEY,
-                                                    event_id VARCHAR(255),  
-                                                    sport_key VARCHAR(100),  
-                                                    sport_title VARCHAR(100),  
-                                                    commence_time TIMESTAMP,  
-                                                    home_team VARCHAR(200),  
-                                                    away_team VARCHAR(200),  
-                                                    bookmaker_key VARCHAR(100),  
-                                                    bookmaker_title VARCHAR(100),  
-                                                    bookmaker_last_update TIMESTAMP,  
-                                                    market_key VARCHAR(100), 
-                                                    market_last_update TIMESTAMP, 
-                                                    outcome_name VARCHAR(200),  
-                                                    price DECIMAL(10, 2),  
-                                                    point DECIMAL(10, 2) NULL  
-                                                );
-
-                )
+                CREATE TABLE IF NOT EXISTS bet_events (
+                    id SERIAL PRIMARY KEY,  
+                    sport_key VARCHAR(100),  
+                    sport_title VARCHAR(100),  
+                    commence_time VARCHAR(100),  
+                    home_team VARCHAR(200),  
+                    away_team VARCHAR(200),  
+                    bookmaker_key VARCHAR(100),  
+                    bookmaker_title VARCHAR(100),   
+                    market_key VARCHAR(100), 
+                    market_last_update VARCHAR(100), 
+                    outcome_name VARCHAR(100),  
+                    price DECIMAL(10, 2)
+                );
             """)
             conn.commit()
             logging.info("Table created or already exists.")
@@ -95,20 +91,17 @@ def cockroach_write(event):
         event_data = event.value
         football_data = map_football_data(event_data)
 
-        # Log extracted data for debugging
-        logging.info(f"Extracted football_data: {football_data}")
-
         # Insert into the database
         with conn.cursor() as cur:
             for bookmaker in football_data['bookmakers']:
                 for market in bookmaker['markets']:
                     for outcome in market['outcomes']:
                         cur.execute('''
-                            INSERT INTO soccer_events (
-                                id, sport_key, sport_title, commence_time, home_team, 
-                                away_team, bookmaker_key, bookmaker_title, market_key, 
-                                outcome_name, outcome_price, outcome_point
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            INSERT INTO bet_events (
+                                sport_key, sport_title, commence_time, home_team, 
+                                away_team, bookmaker_key, bookmaker_title, market_key, market_last_update,
+                                outcome_name, price
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,%s)
                         ''', (
                             football_data['id'],
                             football_data['sport_key'],
@@ -121,7 +114,6 @@ def cockroach_write(event):
                             market['key'],
                             outcome['name'],
                             outcome['price'],
-                            outcome.get('point')  # Use None if 'point' is not present
                         ))
             conn.commit()
 
@@ -142,4 +134,3 @@ setup_database()
 # Process messages
 for msg in consumer:
     cockroach_write(msg)
-    logging.info("Message processed.")
